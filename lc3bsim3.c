@@ -665,18 +665,159 @@ void cycle_memory()
 }
 
 
-void eval_bus_drivers() {
+/* ---- combinational values computed each cycle (wires, not latches) ---- */
+int SR1_OUT    = 0;   /* value of the register selected by SR1MUX */
+int ADDER_OUT  = 0;   /* address adder output; also used by PCMUX in latch_datapath_values */
+int MARMUX_OUT = 0;   /* input to the GateMARMUX tristate */
+int PC_OUT     = 0;   /* input to the GatePC tristate */
 
-  /* 
-   * Datapath routine emulating operations before driving the bus.
-   * Evaluate the input of tristate drivers 
-   *             Gate_MARMUX,
-   *		 Gate_PC,
-   *		 Gate_ALU,
-   *		 Gate_SHF,
-   *		 Gate_MDR.
-   */    
+int ALU_OUT = 0;   /* input to the GateALU tristate */
+int SHF_OUT = 0;   /* input to the GateSHF tristate */
+int MDR_OUT = 0;   /* input to the GateMDR tristate (word, or selected+sign-extended byte) */
 
+/* sign-extend the low 'bits' bits of value to 16 bits */
+int sext(int value, int bits) 
+{
+  value = value & ((1 << bits) - 1);                         /* keep only the low 'bits' bits: mask = (1 << bits) - 1 */
+  if (((value >> (bits - 1)) & 1) == 1) 
+  {                                                 /* top bit of the field is 1 -> negative */
+    value = value | ~((1<< bits) - 1);                       /* fill upper bits with 1s: OR with ~((1 << bits) - 1) */
+  }
+  return Low16bits(value);                                  /* return value cut to 16 bits with Low16bits(...) */
+}
+
+void eval_bus_drivers() 
+{
+  int *micro = CURRENT_LATCHES.MICROINSTRUCTION;
+  int ir     = CURRENT_LATCHES.IR;
+  int sr1_num;
+  int addr1;
+  int addr2;
+
+  /* ---- SR1: which register feeds the ALU's A input and ADDR1MUX's BaseR ---- */
+  if (GetSR1MUX(micro) == 0) 
+  {
+    sr1_num = (ir >> 9) & 0x7;                             /* IR[11:9]: shift ir right 9, AND with 0x7 */
+  } 
+  else 
+  {
+    sr1_num = (ir >> 6) & 0x7;                             /* IR[8:6]: shift ir right 6, AND with 0x7 */
+  }
+  SR1_OUT = CURRENT_LATCHES.REGS[sr1_num];                               /* CURRENT_LATCHES.REGS[sr1_num] */
+
+  /* ---- ADDR1MUX ---- */
+  if (GetADDR1MUX(micro) == 0) 
+  {
+    addr1 = CURRENT_LATCHES.PC;                               /* CURRENT_LATCHES.PC */
+  } 
+  else 
+  {
+    addr1 = SR1_OUT;                               /* SR1_OUT (the BaseR value) */
+  }
+
+  /* ---- ADDR2MUX ---- */
+  if (GetADDR2MUX(micro) == 0) 
+  {
+    addr2 = 0;                                   /* 0 */
+  } 
+  else if (GetADDR2MUX(micro) == 1) 
+  {
+    addr2 = sext(ir, 6);                       /* sext(ir, 6)  -> offset6 */
+  } 
+  else if (GetADDR2MUX(micro) == 2) 
+  {
+    addr2 = sext(ir, 9);                       /* sext(ir, 9)  -> PCoffset9 */
+  } 
+  else 
+  {
+    addr2 = sext(ir, 11);                       /* sext(ir, 11) -> PCoffset11 */
+  }
+
+  /* ---- LSHF1 ---- */
+  if (GetLSHF1(micro) == 1) 
+  {
+    addr2 = addr2 << 1;                       /* addr2 shifted left by 1 */
+  }
+
+  /* ---- address adder ---- */
+  ADDER_OUT = Low16bits(addr1 + addr2);                     /* Low16bits(addr1 + addr2) */
+
+  /* ---- MARMUX ---- */
+  if (GetMARMUX(micro) == 0) 
+  {
+    MARMUX_OUT = ((ir & 0xFF) << 1);                  /* (ir AND 0xFF) shifted left 1  -> trap vector address */
+  } 
+  else 
+  {
+    MARMUX_OUT = ADDER_OUT;                  /* ADDER_OUT */
+  }
+
+  /* ---- PC driver ---- */
+  PC_OUT = CURRENT_LATCHES.PC;                        /* CURRENT_LATCHES.PC */
+
+
+
+    /* ---- ALU B input: imm5 or SR2 register ---- */
+  int b_input;
+
+  if (((ir >> 5) & 1) == 1) 
+  {
+    b_input = sext(ir, 5);                   /* sext(ir, 5) -> imm5 */
+  } 
+  else 
+  {
+    b_input = CURRENT_LATCHES.REGS[ir & 0x7];                   /* CURRENT_LATCHES.REGS[ ir AND 0x7 ] -> SR2 */
+  }
+
+  /* ---- ALU ---- */
+  if (GetALUK(micro) == 0) 
+  {
+    ALU_OUT = Low16bits(SR1_OUT + b_input);                   /* Low16bits(SR1_OUT + b_input) */
+  } 
+  else if (GetALUK(micro) == 1) 
+  {
+    ALU_OUT = SR1_OUT & b_input;                   /* SR1_OUT AND b_input */
+  } 
+  else if (GetALUK(micro) == 2) 
+  {
+    ALU_OUT = SR1_OUT ^ b_input;                   /* SR1_OUT XOR b_input */
+  } 
+  else 
+  {
+    ALU_OUT = SR1_OUT;                   /* PASSA: just SR1_OUT */
+  }
+
+  /* ---- SHF ---- */
+  int amount = ir & 0xF;                  /* IR[3:0]: ir AND 0xF */
+  if (((ir >> 4) & 1) == 0) 
+  {
+    SHF_OUT = Low16bits(SR1_OUT << amount);                   /* LSHF: Low16bits(SR1_OUT shifted left by amount) */
+  } 
+  else 
+  {
+    SHF_OUT = SR1_OUT >> amount;                   /* RSHFL first: SR1_OUT shifted right by amount */
+    if (((ir >> 5) & 1) == 1 && ((SR1_OUT >> 15) & 1) == 1) 
+    {                                             /* RSHFA and original value negative */
+      SHF_OUT = SHF_OUT | (((1 << amount) - 1) << (16 - amount));                 /* SHF_OUT OR (((1 << amount) - 1) << (16 - amount)) */
+    }
+  }
+
+  /* ---- MDR output: whole word, or one byte sign-extended ---- */
+  if (GetDATA_SIZE(micro) == 1) 
+  {
+    MDR_OUT = CURRENT_LATCHES.MDR;                   /* WORD: CURRENT_LATCHES.MDR */
+  } 
+  else 
+  {
+    if ((CURRENT_LATCHES.MAR & 1) == 0) 
+    {
+      MDR_OUT = sext(CURRENT_LATCHES.MDR & 0xFF, 8);                 /* even address: sext(MDR AND 0xFF, 8) */
+    } 
+    else 
+    {
+      MDR_OUT = sext((CURRENT_LATCHES.MDR >> 8) & 0xFF, 8);                 /* odd address: sext((MDR shifted right 8) AND 0xFF, 8) */
+    }
+  }
 }
 
 
