@@ -613,17 +613,56 @@ void eval_micro_sequencer()
 }
 
 
-void cycle_memory() {
- 
-  /* 
-   * This function emulates memory and the WE logic. 
-   * Keep track of which cycle of MEMEN we are dealing with.  
-   * If fourth, we need to latch Ready bit at the end of 
-   * cycle to prepare microsequencer for the fifth cycle.  
-   */
+/* ---- memory model state (persists across cycles) ---- */
+int mem_cycle = 0;   /* how many cycles MIO.EN has been asserted for the current access */
+int MEM_OUT   = 0;   /* 16-bit word read from memory; MDR loads this in latch_datapath_values */
 
+void cycle_memory() 
+{
+  int *micro = CURRENT_LATCHES.MICROINSTRUCTION;
+
+  if (GetMIO_EN(micro) == 0) 
+  {
+    return;                                   /* no memory access this cycle: nothing to do */
+  }
+
+  mem_cycle = mem_cycle + 1;                     /* count this cycle of the access (becomes 1..5) */
+
+  if (mem_cycle == 4) 
+  {                                           /* 4th cycle: raise R so the sequencer sees it NEXT cycle */
+    NEXT_LATCHES.READY = 1;
+  }
+
+  if (mem_cycle == 5 && CURRENT_LATCHES.READY == 1) 
+  {                                           /* 5th cycle: the latched R is 1 -> perform the access now */
+    int word_addr = CURRENT_LATCHES.MAR >> 1; /* MAR byte address -> MEMORY row index */
+    int mar0      = CURRENT_LATCHES.MAR & 0x1;;         /* MAR[0]: 0 = low byte [0], 1 = high byte [1] */
+    int is_write  = GetR_W(micro);            /* 0 = RD, 1 = WR */
+    int is_word   = GetDATA_SIZE(micro);      /* 0 = BYTE, 1 = WORD */
+
+    if (is_write == 0) 
+    {
+      MEM_OUT = (MEMORY[word_addr][1] << 8) | MEMORY[word_addr][0];     /* build 16-bit word: high byte [1] shifted up, OR low byte [0] */
+    } 
+    else 
+    {
+      int we0 = is_word || (!is_word && mar0 == 0);;     /* low byte enable: word store, OR byte store with MAR[0]==0 */
+      int we1 = is_word || (!is_word && mar0 == 1);     /* high byte enable: word store, OR byte store with MAR[0]==1 */
+
+      if (we0 == 1) 
+      {
+        MEMORY[word_addr][0] = CURRENT_LATCHES.MDR & 0xFF;  /* MDR[7:0] */
+      }
+      if (we1 == 1) 
+      {
+        MEMORY[word_addr][1] = (CURRENT_LATCHES.MDR >> 8) & 0xFF;  /* MDR[15:8], shifted down to 0..255 */
+      }
+    }
+
+    NEXT_LATCHES.READY = 0;                /* drop R so the next access starts clean */
+    mem_cycle = 0;                         /* reset the counter for the next access */
+  }
 }
-
 
 
 void eval_bus_drivers() {
