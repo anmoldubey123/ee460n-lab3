@@ -574,13 +574,42 @@ int main(int argc, char *argv[]) {
 /***************************************************************/
 
 
-void eval_micro_sequencer() {
-
+void eval_micro_sequencer() 
+{
   /* 
    * Evaluate the address of the next state according to the 
    * micro sequencer logic. Latch the next microinstruction.
    */
 
+  int *micro = CURRENT_LATCHES.MICROINSTRUCTION;   /* (A) */
+  int next_state;
+
+  if (GetIRD(micro) == 1) 
+  {                        /* (B) */
+    next_state = (CURRENT_LATCHES.IR >> 12) & 0xF;                 
+  }
+  else 
+  {
+    int j    = GetJ(micro);                        /* (C) */
+    int cond = GetCOND(micro);
+    next_state = j;
+
+    if (cond == 1) 
+    {                               /* (D) */
+      next_state = next_state | ((1 & CURRENT_LATCHES.READY) << 1);   /* Check ready bit */
+    }
+    if (cond == 2) 
+    {
+      next_state = next_state | ((1 & CURRENT_LATCHES.BEN) << 2);   /* check branch enable */
+    }
+    if (cond == 3) 
+    {
+      next_state = next_state | (CURRENT_LATCHES.IR >> 11 & 0x1);  /* check ir[11] */
+    }
+  }
+
+  NEXT_LATCHES.STATE_NUMBER = next_state;          /* (E) */
+  memcpy(NEXT_LATCHES.MICROINSTRUCTION, CONTROL_STORE[next_state], sizeof(int) * CONTROL_STORE_BITS);
 }
 
 
