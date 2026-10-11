@@ -821,13 +821,36 @@ void eval_bus_drivers()
 }
 
 
-void drive_bus() {
+void drive_bus() 
+{
+  int *micro = CURRENT_LATCHES.MICROINSTRUCTION;
 
-  /* 
-   * Datapath routine for driving the bus from one of the 5 possible 
-   * tristate drivers. 
-   */       
+  if (GetGATE_MARMUX(micro) == 1) 
+  {
+    BUS = MARMUX_OUT;        /* MARMUX_OUT */
+  } 
+  else if (GetGATE_PC(micro) == 1) 
+  {
+    BUS = PC_OUT;        /* PC_OUT */
+  } 
+  else if (GetGATE_ALU(micro) == 1) 
+  {
+    BUS = ALU_OUT;        /* ALU_OUT */
+  } 
+  else if (GetGATE_SHF(micro) == 1) 
+  {
+    BUS = SHF_OUT;        /* SHF_OUT */
+  } 
+  else if (GetGATE_MDR(micro) == 1) 
+  {
+    BUS = MDR_OUT;        /* MDR_OUT */
+  } 
+  else 
+  {
+    BUS = 0;                    /* nothing gated: put 0 on the bus */
+  }
 
+  BUS = Low16bits(BUS);          /* Low16bits(BUS) so it is always 16 bits */
 }
 
 
