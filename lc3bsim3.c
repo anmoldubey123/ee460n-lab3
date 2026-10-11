@@ -854,13 +854,101 @@ void drive_bus()
 }
 
 
-void latch_datapath_values() {
+void latch_datapath_values() 
+{
+  int *micro = CURRENT_LATCHES.MICROINSTRUCTION;
+  int ir     = CURRENT_LATCHES.IR;
 
-  /* 
-   * Datapath routine for computing all functions that need to latch
-   * values in the data path at the end of this cycle.  Some values
-   * require sourcing the bus; therefore, this routine has to come 
-   * after drive_bus.
-   */       
+  /* ---- MAR ---- */
+  if (GetLD_MAR(micro) == 1) 
+  {
+    NEXT_LATCHES.MAR = BUS;                 /* BUS */
+  }
 
+  /* ---- MDR: from memory (5th cycle only) or from the bus ---- */
+  if (GetLD_MDR(micro) == 1) 
+  {
+    if (GetMIO_EN(micro) == 1) 
+    {
+      if (CURRENT_LATCHES.READY == 1) 
+      {
+        NEXT_LATCHES.MDR = MEM_OUT;             /* MEM_OUT */
+      }
+    } 
+    else 
+    {
+      if (GetDATA_SIZE(micro) == 1) 
+      {
+        NEXT_LATCHES.MDR = BUS;             /* WORD: BUS */
+      } 
+      else 
+      {
+        NEXT_LATCHES.MDR = (BUS & 0xFF) | ((BUS & 0xFF) << 8);     /* BYTE: (BUS AND 0xFF) OR ((BUS AND 0xFF) shifted left 8) */
+      }
+    }
+  }
+
+  /* ---- IR ---- */
+  if (GetLD_IR(micro) == 1) 
+  {
+    NEXT_LATCHES.IR = BUS;                  /* BUS */
+  }
+
+  /* ---- BEN ---- */
+  if (GetLD_BEN(micro) == 1) 
+  {
+    int n_bit = (ir >> 11) & 1;                        /* IR[11]: (ir shifted right 11) AND 1 */
+    int z_bit = (ir >> 10) & 1;                        /* IR[10]: (ir shifted right 10) AND 1 */
+    int p_bit = (ir >> 9) & 1;                         /* IR[9]:  (ir shifted right 9)  AND 1 */
+    NEXT_LATCHES.BEN = (n_bit & CURRENT_LATCHES.N) | (z_bit & CURRENT_LATCHES.Z) | (p_bit & CURRENT_LATCHES.P);         /* (n_bit AND CURRENT N) OR (z_bit AND CURRENT Z) OR (p_bit AND CURRENT P) */
+  }
+
+  /* ---- register file ---- */
+  if (GetLD_REG(micro) == 1) 
+  {
+    int dr;
+    if (GetDRMUX(micro) == 0) 
+    {
+      dr = ((ir >> 9) & 0x7);                             /* IR[11:9]: (ir shifted right 9) AND 0x7 */
+    } 
+    else 
+    {
+      dr = 7;                                 /* R7 */
+    }
+    NEXT_LATCHES.REGS[dr] = BUS;            /* BUS */
+  }
+
+  /* ---- condition codes: set from the value on the bus ---- */
+  if (GetLD_CC(micro) == 1) 
+  {
+    if (((BUS >> 15) & 1) == 1) 
+    {
+      NEXT_LATCHES.N = 1;  NEXT_LATCHES.Z = 0;  NEXT_LATCHES.P = 0;   /* negative */
+    } 
+    else if (BUS == 0) 
+    {
+      NEXT_LATCHES.N = 0;  NEXT_LATCHES.Z = 1;  NEXT_LATCHES.P = 0;   /* zero */
+    } 
+    else 
+    {
+      NEXT_LATCHES.N = 0;  NEXT_LATCHES.Z = 0;  NEXT_LATCHES.P = 1;   /* positive */
+    }
+  }
+
+  /* ---- PC ---- */
+  if (GetLD_PC(micro) == 1) 
+  {
+    if (GetPCMUX(micro) == 0) 
+    {
+      NEXT_LATCHES.PC = Low16bits(CURRENT_LATCHES.PC + 2);        /* Low16bits(CURRENT_LATCHES.PC + 2) */
+    } 
+    else if (GetPCMUX(micro) == 1) 
+    {
+      NEXT_LATCHES.PC = BUS;                /* BUS */
+    } 
+    else 
+    {
+      NEXT_LATCHES.PC = ADDER_OUT;                /* ADDER_OUT */
+    }
+  }
 }
